@@ -102,11 +102,23 @@ def create_child_item_appointment(parent_doc_name,child_fields,department):
 		'appointment_time':child_fields['appointment_time']
 	}
 	child=frappe.get_doc(child_doc)
+	appointment_abbrev = get_appointment_abbrev(child,child_fields,parent_doc,department);
 	child.insert(ignore_permissions=True)
 	frappe.db.set_value("Patient Appointment",child.name,'department', department)
+	frappe.db.set_value("Patient Appointment",child.name,'appointment_abbrev', appointment_abbrev)
 	frappe.db.set_value("Patient Appointment",child.name,'duration', child_fields['duration'])
 	frappe.db.set_value("Patient Appointment",child.name,'appointment_type', parent_doc.appointment_type)
 	return child.name
+
+def get_appointment_abbrev(child,child_fields,parent_doc,department):
+	appointment_abbrev = "	Main\n"
+	if child.parent_patient_appointment_cf :
+		appointment_abbrev = "	Child\n"
+	appointment_abbrev += child_fields['practitioner']+"\n"
+	appointment_abbrev += parent_doc.patient+"\n"
+	appointment_abbrev += department+"\n"
+	appointment_abbrev += child_fields['service_unit']+"\n"
+	return appointment_abbrev;
 
 @frappe.whitelist()
 def get_availability_data(date, practitioner,schedule_duration):
@@ -415,7 +427,7 @@ def get_events(start, end, filters=None):
 	data = frappe.db.sql(
 		"""
 		select
-		`tabPatient Appointment`.name, `tabPatient Appointment`.patient,
+		`tabPatient Appointment`.name, `tabPatient Appointment`.patient,`tabPatient Appointment`.tool_tip,
 		`tabPatient Appointment`.practitioner, `tabPatient Appointment`.status,
 		`tabPatient Appointment`.duration,
 		timestamp(`tabPatient Appointment`.appointment_date, `tabPatient Appointment`.appointment_time) as 'start',
@@ -435,7 +447,7 @@ def get_events(start, end, filters=None):
 
 	for item in data:
 		item.end = item.start + datetime.timedelta(minutes=item.duration)
-
+	print(f'Data : {data[0]}')
 	return data
 
 @frappe.whitelist()
