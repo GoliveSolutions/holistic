@@ -56,12 +56,12 @@ def book_patient_appointment(date, practitioner,no_of_sessions,time,department,p
 	schedule_duration=cint(time)
 	child_doc_msg=[]
 	child_doc_names=[]
-
+	patient = last_parent_doc.patient
 	for session in range(cint(no_of_sessions)):
-		appointment=get_availability_data(next_date,practitioner,schedule_duration)
+		appointment=get_availability_data(next_date,practitioner,schedule_duration,patient)
 		while appointment == -1:
 			next_date=add_days(next_date,1)
-			appointment=get_availability_data(next_date,practitioner,schedule_duration)
+			appointment=get_availability_data(next_date,practitioner,schedule_duration,patient)
 
 		if appointment != -1:
 			child_doc_name=create_child_item_appointment(parent_doc,appointment,department)
@@ -90,6 +90,7 @@ def create_child_item_appointment(parent_doc_name,child_fields,department):
 		'inpatient_record':parent_doc.inpatient_record,
 		'company':parent_doc.company,
 		'practitioner':child_fields['practitioner'],
+		'department': department,
 		'patient_detail_annotation_cf':parent_doc.patient_detail_annotation_cf,
 		'annotated_patient_detail_image_cf':parent_doc.annotated_patient_detail_image_cf,
 		'tc_name':parent_doc.tc_name,
@@ -109,7 +110,7 @@ def create_child_item_appointment(parent_doc_name,child_fields,department):
 	return child.name
 
 @frappe.whitelist()
-def get_availability_data(date, practitioner,schedule_duration):
+def get_availability_data(date, practitioner,schedule_duration,patient):
 	"""
 	Get availability data of 'practitioner' on 'date'
 	:param date: Date to check in schedule
@@ -125,7 +126,7 @@ def get_availability_data(date, practitioner,schedule_duration):
 	check_employee_wise_availability(date, practitioner_doc)
 
 	if practitioner_doc.practitioner_schedules:
-		slot_details = get_available_slots(practitioner_doc, date,schedule_duration)
+		slot_details = get_available_slots(practitioner_doc, date,schedule_duration,patient)
 	else:
 		frappe.throw(
 			_(
@@ -177,12 +178,13 @@ def check_employee_wise_availability(date, practitioner_doc):
 				)
 				return -1
 
-def get_available_slots(practitioner_doc, date,schedule_duration):
+def get_available_slots(practitioner_doc, date,schedule_duration,patient):
 	available_slots = slot_details = []
 	child_slot={}
 	weekday = date.strftime("%A")
 	practitioner = practitioner_doc.name
 	schedule_with_required_duration_found=False
+	child_slot_matched = 0
 	for schedule_entry in practitioner_doc.practitioner_schedules:
 
 		validate_practitioner_schedules(schedule_entry, practitioner)
@@ -195,7 +197,7 @@ def get_available_slots(practitioner_doc, date,schedule_duration):
 				if weekday == time_slot.day:
 					available_slots.append(get_time_str(time_slot.from_time))
 
-			if available_slots:
+			if available_slots and len(available_slots)>0 :
 				appointments = []
 				# overlap changes
 				allow_overlap = 1
@@ -256,13 +258,18 @@ def get_available_slots(practitioner_doc, date,schedule_duration):
 					
 				# )
 
-				child_slot={
-					"appointment_time":available_slots[0],
-					"duration":schedule_duration,
-					"practitioner":practitioner_doc.practitioner_name,
-					"appointment_date":date,
-					"service_unit":schedule_entry.service_unit
-				}
+				for available_slot in available_slots:
+					child_slot={
+						"appointment_time":available_slot,
+						"duration":schedule_duration,
+						"practitioner":practitioner_doc.practitioner_name,
+						"appointment_date":date,
+						"service_unit":schedule_entry.service_unit
+					}
+					if validate_overlaps(child_slot,patient):
+						child_slot_matched = 1
+						break
+
 	if schedule_with_required_duration_found==False:
 		frappe.throw(
 			_(
@@ -272,8 +279,70 @@ def get_available_slots(practitioner_doc, date,schedule_duration):
 				frappe.bold(schedule_duration),
 			),
 			title=_("Schedule with required duration Not Found"),
-		)		
-	return child_slot
+		)
+	if child_slot_matched : 			
+		return child_slot
+	else :
+		return None	
+
+def validate_overlaps(child_slot,patient):
+	end_time = datetime.datetime.combine(
+		getdate(child_slot["appointment_date"]), get_time(child_slot["appointment_time"])
+	) + datetime.timedelta(minutes=flt(child_slot["duration"]))
+
+	# all appointments for both patient and practitioner overlapping the duration of this appointment
+	overlapping_appointments = frappe.db.sql(
+		"""
+		SELECT
+			name, practitioner, patient, appointment_time, duration, service_unit
+		FROM
+			`tabPatient Appointment`
+		WHERE
+			appointment_date=%(appointment_date)s AND status NOT IN ("Closed", "Cancelled") AND
+			(practitioner=%(practitioner)s OR patient=%(patient)s) AND
+			((appointment_time<%(appointment_time)s AND appointment_time + INTERVAL duration MINUTE>%(appointment_time)s) OR
+			(appointment_time>%(appointment_time)s AND appointment_time<%(end_time)s) OR
+			(appointment_time=%(appointment_time)s))
+		""",
+		{
+			"appointment_date": child_slot["appointment_date"],
+			"practitioner": child_slot["practitioner"],
+			"patient": patient,
+			"appointment_time": child_slot["appointment_time"],
+			"end_time": end_time.time(),
+		},
+		as_dict=True,
+	)
+
+	if not overlapping_appointments:
+		return  1 # No overlaps, nothing to validate!
+
+	if child_slot["service_unit"]:  # validate service unit capacity if overlap enabled
+		allow_overlap, service_unit_capacity = frappe.get_value(
+			"Healthcare Service Unit", child_slot["service_unit"], ["overlap_appointments", "service_unit_capacity"]
+		)
+		if allow_overlap:
+			service_unit_appointments = list(
+				filter(
+					lambda appointment: appointment["service_unit"] == child_slot["service_unit"]
+					and appointment["patient"] != patient,
+					overlapping_appointments,
+				)
+			)  # if same patient already booked, it should be an overlap
+			if len(service_unit_appointments) >= (service_unit_capacity or 1):
+				return 0
+			else:  # service_unit_appointments within capacity, remove from overlapping_appointments
+				overlapping_appointments = [
+					appointment
+					for appointment in overlapping_appointments
+					if appointment not in service_unit_appointments
+				]
+
+	if overlapping_appointments:
+		return 0
+	else :
+		print(f'child_slot : {child_slot}')
+		return 1	
 
 def validate_practitioner_schedules(schedule_entry, practitioner):
 	if schedule_entry.schedule:
