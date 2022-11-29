@@ -358,7 +358,6 @@ def validate_overlaps(child_slot,patient):
 	if overlapping_appointments:
 		return 0
 	else :
-		print(f'child_slot : {child_slot}')
 		return 1	
 
 def validate_practitioner_schedules(schedule_entry, practitioner):
@@ -521,7 +520,6 @@ def get_events(start, end, filters=None):
 
 	for item in data:
 		item.end = item.start + datetime.timedelta(minutes=item.duration)
-	print(f'Data : {data[0]}')
 	return data
 
 @frappe.whitelist()
