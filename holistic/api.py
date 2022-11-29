@@ -101,12 +101,13 @@ def create_child_item_appointment(parent_doc_name,child_fields,department):
 		'diagnosis_cf':parent_doc.diagnosis_cf,
 		'appointment_date':child_fields['appointment_date'],
 		'appointment_time':child_fields['appointment_time'],
-		'to_time':get_end_time(child_fields['appointment_date'],child_fields['appointment_time'],child_fields['duration'])
 	}
 	child=frappe.get_doc(child_doc)
 	appointment_abbrev = get_appointment_abbrev(child,child_fields,parent_doc,department);
+	to_time = get_end_time(child_fields['appointment_date'],child_fields['appointment_time'],child_fields['duration'])
 	child.insert(ignore_permissions=True)
 	frappe.db.set_value("Patient Appointment",child.name,'department', department)
+	frappe.db.set_value("Patient Appointment",child.name,'to_time', to_time)
 	frappe.db.set_value("Patient Appointment",child.name,'appointment_abbrev', appointment_abbrev)
 	frappe.db.set_value("Patient Appointment",child.name,'duration', child_fields['duration'])
 	frappe.db.set_value("Patient Appointment",child.name,'appointment_type', parent_doc.appointment_type)
